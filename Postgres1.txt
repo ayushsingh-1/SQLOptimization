@@ -1,0 +1,244 @@
+Jun 24:
+
+Best way to understand how to read an "explain analyze" statement is to read it from below to above.
+
+select * from staff;
+select substring(last_name,1,4) as sub_name from staff;
+explain select * from staff;
+explain select * from staff where last_name='Jones';
+explain analyze select salary from staff;
+explain analyze select distinct(salary) from staff;
+explain analyze select * from staff where last_name like 'Col%';
+select * from staff where last_name like 'Col%';
+select * from staff where salary >75000;
+explain analyze select * from staff where salary>75000;
+explain analyze select count(*) from staff where salary>75000;
+explain analyze select last_name, salary from staff where salary between 50000 and 70000 order by salary asc;
+
+select last_name, salary from staff where salary between 50000 and 70000 order by salary asc;
+
+
+create index idx_staff_salary on staff(salary);
+
+explain analyze select last_name, salary from staff where salary between 80000 and 100000 order by salary desc;
+#Index will be used since the number of rows returned are fairly small.
+
+explain analyze select last_name, salary from staff where salary >60000;
+#Index will not be used since the number of rows being returned are so big, compiler chose not to use index, full scan was a faster option 
+
+drop index idx_staff_salary;
+
+Jul 2:
+
+B-Tree Index: Uses a tree like index with mid value of the selected range in the middle and keeping both the sides relatively on the same level to avoid fast or slow operations.
+
+explain analyze select trim(last_name), trim(job_title), round(salary,2) from staff where last_name like 'D%';
+
+explain analyze select * from staff;
+
+create index idx_staff_salary on staff(salary);
+
+explain analyze select last_name, salary from staff where salary>100000;
+
+explain analyze select last_name, salary from staff where salary>100000 and salary<120000;
+
+drop index idx_staff_salary;
+
+create index idx_staff_last_name on staff(last_name);
+
+explain analyze select last_name, salary from staff where salary>100000 and salary<120000 and last_name like 'K%';
+
+drop index idx_staff_last_name;
+
+create index idx_staff_email on staff(email);
+
+explain analyze select * from staff where email like 'bphillips%';
+
+drop index idx_staff_email;
+
+Bitmap Index: Used for low cardinality columns (which has less no. of distinct values). No. Of bits in the bit map index is equal to number of distinct values for that column. Operated on 2 bitmap indexed columns being calculated with AND, OR and NOT operators. Postgres does not let us create bitmap indexes explicitly, it creates that on the fly when an already B-Tree index has been created on the column.
+
+select distinct trim(job_title) as j, count(*) from staff group by cube(job_title) order by j asc;
+
+select last_name from staff where job_title like '%Operator%';
+
+create index idx_staff_job_title on staff(job_title);
+
+explain analyze select * from staff where job_title like 'Operator';
+
+drop index idx_staff_job_title;
+
+create index idx_staff_job_title on staff(job_title);
+create index idx_staff_gender on staff(gender);
+explain analyze select * from staff where job_title = 'Operator' AND gender= 'Male';
+
+Jul 3:
+
+create index idx_staff_job_title on staff(job_title);
+explain analyze select job_title from staff where job_title like 'Developer%';
+drop index idx_staff_job_title;
+
+create index idx_staff_gender on staff(gender);
+explain analyze select gender from staff;
+drop index idx_staff_gender;
+
+Hash Index f(x)=y; x=input, y=output, smaller than B-Tree Indexes but just as fast. Used for equality where conditions. Apply on column which has unique values and range may not be used, like email.
+
+create index idx_staff_hash_email on staff using hash (email);
+select distinct email from staff;
+explain analyze select * from staff where email ='jfordgj@nyu.edu';
+drop index idx_staff_hash_email;
+
+create index idx_staff_hash_id on staff using hash (id);
+select distinct(id) from staff;
+explain analyze select * from staff where id='643';
+drop index idx_staff_hash_id;
+
+
+set enable_nestloop=true;
+set enable_hashjoin=false;
+set enable_mergejoin=false;
+
+explain analyze select s.id, s.last_name, s.job_title, cr.country from staff as s join company_regions as cr on s.region_id=cr.region_id;
+
+set enable_nestloop=false;
+set enable_hashjoin=true;
+set enable_mergejoin=true;
+
+Postgres creates indexes automatically on the primary keys. So make sure that the corresponding foreign key is also an indexed value, to make processing faster during a join.
+
+create index idx_company_regions_hash_region_id on company_regions using hash(region_id)
+explain analyze select s.id, s.last_name, s.job_title, cr.country from staff as s join company_regions as cr on s.region_id=cr.region_id;
+drop index idx_company_regions_hash_region_id;
+
+Jul 6:
+
+Hash join: To enable hash joins, just use the enable_hashjoin=true;. Run hash join with an on condition that is also an equality condition.
+
+Process: 
+1. Make a hash table using the hash function on the values in the smaller table. Corresponding to those hash value, have a reference "RowIDs" to the original values of the smaller table.
+2. Generate hash values with the same function for values in the bigger table and equate the those hash values with the value in the hash table. And finally find the reference "RowIDs" to go directly to the row in need in the smaller table.
+
+This is better than normal joins because they match each value in the bigger table against every other value in the smaller table. Whereas by using hashes, we can directly go to "RowIDs" and find the value in need.
+
+set enable_nestloop=false;
+set enable_mergejoin=false;
+set enable_hashjoin=true;
+
+explain analyze select s.id, s.last_name, s.job_title, cr.country from staff as s join company_regions as cr on s.region_id=cr.region_id;
+
+create index idx_company_regions_hash_region_id on company_regions using hash (region_id);
+drop index idx_company_regions_hash_region_id;
+
+Merge Joins (Sorting joins): Works only on equality conditions. We start by sorting both tables, irrespective of their sizes. Then we do the lookups. We feel the speed when we know that we would not have to search for values before the last join values matched because the next value being matched will be = or > than the last join value.
+
+set enable_nestloop=false;
+set enable_hashjoin=false;
+set enable_mergejoin=true;
+
+explain analyze select s.id, s.last_name, s.job_title, cr.country from staff as s join company_regions as cr on s.region_id=cr.region_id;
+
+Jul 7:
+
+Horizontal Partitioning: Different from partitions learned in the last course. Those were for providing windowing functions alternatively to sub queries in select statements. These are for actually partitioning during create table statements. 
+
+Partition by Range: Number or time oriented. Values fit for this kind of partition includes numbers or dates. (For values from _ to _)
+
+create table iot_measurement(
+location_id int not null,
+measure_date date not null,
+temp_celsius int,
+rel_humidity_pct int)
+partition by range (measure_date);
+
+create table iot_measurement_wk1_2019 partition of iot_measurement for values from ('2019-01-01') to ('2019-01-08');
+create table iot_measurement_wk2_2019 partition of iot_measurement for values from ('2019-01-09') to ('2019-01-16');
+create table iot_measurement_wk3_2019 partition of iot_measurement for values from ('2019-01-17') to ('2019-01-24');
+
+drop table iot_measurement_wk2_2019;
+
+Partition by Lists: "List of values" oriented. All the rows for that list value will be allowed in the partition. Categories or regions are good places to start. (For values in _,_,_)
+
+create table products(
+prod_id int not null,
+prod_name char not null,
+prod_short_desc text not null,
+prod_long_desc text not null,
+prod_category varchar not null)
+partition by list (prod_category);
+
+create table clothing partition of products for values in ('casual_clothing','business_attire','formal_attire');
+create table electronics partition of products for values in ('mobile_phone', 'televisions', 'headphones');
+create table kitchen partition of products for values in ('cutlery','blenders','silverware');
+
+Jul 8:
+
+create table categories (
+category_id int not null,
+category_name varchar not null,
+category_desc varchar not null)
+partition by list (category_name);
+
+create table automotive partition of categories for values in ('cars', 'trucks', 'motorbikes');
+create table baby partition of categories for values in ('diapers', 'pacifiers', 'onesies');
+create table groceries partition of categories for values in ('veggies', 'meat', 'seafood');
+
+Partition by Hash: Uses a hash function to create a hash value of the partition key selected, and then does a modulus of that partition key to get a remainder, that remainder determines which partition a record is gonna go into. (For values with (modulus _, remainder _)
+
+create table customer_interactions(
+ci_id int not null,
+ci_url varchar not null,
+time_at_url int not null,
+click_sequence int not null)
+partition by hash (ci_id);
+
+create table customer_interactions_1 partition of customer_interactions for values with (modulus 3, remainder 0);
+create table customer_interactions_2 partition of customer_interactions for values with (modulus 3, remainder 1);
+create table customer_interactions_3 partition of customer_interactions for values with (modulus 3, remainder 2);
+
+Materialized View: A materialized view is defined as a table which is actually physically stored on disk, but is really just a view of other database tables. In PostgreSQL, like many database systems, when data is retrieved from a traditional view it is really executing the underlying query or queries that build that view. This is great for better representation of data for users, but does not do anything to help performance.
+
+Materialized views are different in that they are an actual physical table that is built from the data in other tables.
+
+set enable_hashjoin=true; 
+explain create materialized view mv_staff as
+(select s.id, s.last_name, s.job_title, cr.company_regions from staff as s join company_regions as cr on s.region_id=cr.region_id)
+
+explain analyze create materialized view mv_staff as
+(select s.id, s.last_name, s.job_title, cr.company_regions from staff as s join company_regions as cr on s.region_id=cr.region_id)
+
+explain analyze select * from mv_staff;
+
+refresh materialized view mv_staff;
+
+Jul 14: 
+
+create materialized view mv_staff1 as 
+(select s.last_name, s.salary, s.job_title, cr.country from staff as s join company_regions as cr on s.region_id = cr.region_id)
+
+select * from mv_staff1;
+refresh materialized view mv_staff1;
+
+AutoVacuum: A house keeping feature that reclaims space from obsolete rows or data of the table.
+
+vacuum (full) staff;
+vacuum (full, analyze) staff;
+
+Reindex: Recreate the whole index
+
+create index idx_staff_gender on staff(gender); 
+reindex index idx_staff_gender;
+reindex table staff;
+
+Jul 16:
+ 
+create materialized view mv_staff2 as (select s.last_name, cd.department from staff as s join company_divisions as cd on s.department = cd.department)
+refresh materialized view mv_staff2;
+select * from mv_staff2;
+drop materialized view mv_staff2;
+
+reindex index idx_staff_gender;
+
+
+
+
